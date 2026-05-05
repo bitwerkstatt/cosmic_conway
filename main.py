@@ -44,7 +44,7 @@ def randomize(grid: list[list[int]], density: float = 0.35) -> None:
             grid[y][x] = 1 if random.random() < density else 0
 
 
-@micropython.viper
+@micropython.native
 def count_neighbours(grid, x: int, y: int) -> int:
     """Zählt lebende Nachbarn (toroidal, d.h. die Ränder wickeln sich um)."""
     total = int(0)
@@ -60,7 +60,7 @@ def count_neighbours(grid, x: int, y: int) -> int:
     return total
 
 
-@micropython.viper
+@micropython.native
 def step(current, nxt) -> None:
     """Berechnet eine Generation von Conway's Game of Life."""
     H = int(HEIGHT)
@@ -99,7 +99,7 @@ def draw(grid: list[list[int]], prev: list[list[int]]) -> None:
     cu.update(graphics)
 
 
-@micropython.viper
+@micropython.native
 def population(grid) -> int:
     """Gibt die Anzahl lebender Zellen zurück."""
     total = int(0)
@@ -112,7 +112,7 @@ def population(grid) -> int:
     return total
 
 
-@micropython.viper
+@micropython.native
 def is_cyclic(history) -> bool:
     """True, wenn die Population einen sich wiederholenden Zyklus bildet."""
     n = int(len(history))
@@ -133,7 +133,6 @@ def is_cyclic(history) -> bool:
     return False
 
 
-@micropython.native
 def handle_buttons(paused: bool, tick_ms: int) -> tuple[bool, int]:
     """Verarbeitet Knopfeingaben, gibt neuen paused-Zustand und Tick-Zeit zurück."""
     if cu.is_pressed(CosmicUnicorn.SWITCH_BRIGHTNESS_UP):
