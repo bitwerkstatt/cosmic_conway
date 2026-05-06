@@ -7,7 +7,7 @@ from picographics import PicoGraphics, DISPLAY_COSMIC_UNICORN
 # --- Konstanten ---
 WIDTH  = CosmicUnicorn.WIDTH   # 32
 HEIGHT = CosmicUnicorn.HEIGHT  # 32
-TICK_MS     = 100              # Millisekunden pro Generation (Schrittweite)
+TICK_MS     = 100             # Millisekunden pro Generation (Schrittweite)
 TICK_MIN_MS = 100
 TICK_MAX_MS = 2000
 
@@ -78,7 +78,9 @@ def step(current, nxt) -> None:
 @micropython.native
 def draw(grid: list[list[int]], prev: list[list[int]]) -> None:
     """Zeichnet das aktuelle Raster auf das Display."""
+    graphics.set_pen(BLACK)
     graphics.clear()
+    
 
     for y in range(HEIGHT):
         for x in range(WIDTH):
