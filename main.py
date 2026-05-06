@@ -90,7 +90,7 @@ def step(current, nxt) -> None:
 
 
 @micropython.native
-def draw(grid: list[list[int]], prev: list[list[int]]) -> None:
+def draw(grid: list[list[int]], prev: list[list[int]], born_pen: int, alive_pen:int) -> None:
     """Zeichnet das aktuelle Raster auf das Display."""
     graphics.set_pen(BLACK)
     graphics.clear()
@@ -101,9 +101,9 @@ def draw(grid: list[list[int]], prev: list[list[int]]) -> None:
             cur  = grid[y][x]
             was  = prev[y][x]
             if cur and not was:
-                pen = BORN
+                pen = born_pen
             elif cur:
-                pen = ALIVE
+                pen = alive_pen
             else:
                 continue
             graphics.set_pen(pen)
@@ -186,7 +186,7 @@ while True:
 
     if not paused:
         step(grid, nxt)
-        draw(nxt, grid)
+        draw(nxt, grid, BORN, ALIVE)
         # Puffer rotieren (kein Speicher allokieren)
         grid, nxt, prev = nxt, prev, grid
 
