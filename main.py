@@ -4,197 +4,242 @@ import time
 from cosmic import CosmicUnicorn
 from picographics import PicoGraphics, DISPLAY_COSMIC_UNICORN
 
-# --- Konstanten ---
+# --- Constants ---
 WIDTH  = CosmicUnicorn.WIDTH   # 32
 HEIGHT = CosmicUnicorn.HEIGHT  # 32
-TICK_MS     = 100             # Millisekunden pro Generation (Schrittweite)
+
+# Padded grid: 1-cell halo on every side gives toroidal wrap-around
+# without modulo arithmetic in the inner loop (the RP2040 has no HW divider).
+PAD_W    = WIDTH + 2   # 34
+PAD_H    = HEIGHT + 2  # 34
+PAD_SIZE = PAD_W * PAD_H
+
+TICK_MS     = 100   # milliseconds per generation
 TICK_MIN_MS = 100
 TICK_MAX_MS = 2000
 
-CYCLE_MAX_PERIOD  = 20                              # maximale Periode, die erkannt wird
-CYCLE_MIN_REPEATS = 3                               # mehr als zwei Wiederholungen nötig
+CYCLE_MAX_PERIOD  = 20
+CYCLE_MIN_REPEATS = 3
 HISTORY_SIZE      = CYCLE_MAX_PERIOD * CYCLE_MIN_REPEATS
 
-# --- Hardware initialisieren ---
+# Button input timing.
+BTN_DEBOUNCE_MS    = 180   # rising-edge debounce window
+BRIGHTNESS_RATE_MS = 80    # repeat rate while a brightness button is held
+
+# --- Hardware ---
 cu = CosmicUnicorn()
 graphics = PicoGraphics(display=DISPLAY_COSMIC_UNICORN)
-
 cu.set_brightness(0.5)
 
-# --- Farben als Pen-Werte ---
+# --- Colours ---
 BLACK = graphics.create_pen(0, 0, 0)
 
-# Paletten: (BORN-Farbe, ALIVE-Farbe)
+# Palettes: (BORN pen, ALIVE pen)
 PALETTES = [
-    (graphics.create_pen(0, 255, 180),   graphics.create_pen(0, 200, 80)),    # Cyan / Grün
-    (graphics.create_pen(255, 255, 0),   graphics.create_pen(255, 140, 0)),   # Gelb / Orange
-    (graphics.create_pen(255, 150, 200), graphics.create_pen(220, 20, 60)),   # Rosa / Rot
-    (graphics.create_pen(200, 0, 255),   graphics.create_pen(0, 100, 255)),   # Violett / Blau
-    (graphics.create_pen(255, 220, 80),  graphics.create_pen(200, 0, 0)),     # Feuer
-    (graphics.create_pen(220, 240, 255), graphics.create_pen(60, 140, 255)),  # Eis
+    (graphics.create_pen(0, 255, 180),   graphics.create_pen(0, 200, 80)),    # Cyan / Green
+    (graphics.create_pen(255, 255, 0),   graphics.create_pen(255, 140, 0)),   # Yellow / Orange
+    (graphics.create_pen(255, 150, 200), graphics.create_pen(220, 20, 60)),   # Pink / Red
+    (graphics.create_pen(200, 0, 255),   graphics.create_pen(0, 100, 255)),   # Violet / Blue
+    (graphics.create_pen(255, 220, 80),  graphics.create_pen(200, 0, 0)),     # Fire
+    (graphics.create_pen(220, 240, 255), graphics.create_pen(60, 140, 255)),  # Ice
     (graphics.create_pen(180, 255, 180), graphics.create_pen(0, 140, 0)),     # Matrix
     (graphics.create_pen(255, 255, 150), graphics.create_pen(200, 100, 0)),   # Gold
-    (graphics.create_pen(100, 220, 255), graphics.create_pen(0, 40, 180)),    # Ozean
+    (graphics.create_pen(100, 220, 255), graphics.create_pen(0, 40, 180)),    # Ocean
     (graphics.create_pen(255, 150, 255), graphics.create_pen(180, 0, 200)),   # Magenta
 ]
 
-BORN, ALIVE = PALETTES[0]
+born_pen, alive_pen = PALETTES[0]
 
 
-# --- Hilfsfunktionen ---
+# --- Helpers ---
 
-@micropython.native
-def make_grid() -> list[list[int]]:
-    """Gibt ein leeres WIDTH×HEIGHT-Raster zurück."""
-    return [[0] * WIDTH for _ in range(HEIGHT)]
-
-
-def randomize(grid: list[list[int]], density: float = 0.35) -> None:
-    """Befüllt das Raster zufällig mit lebenden Zellen und wählt eine zufällige Palette."""
-    global BORN, ALIVE
-    BORN, ALIVE = PALETTES[random.randint(0, len(PALETTES) - 1)]
-    for y in range(HEIGHT):
-        for x in range(WIDTH):
-            grid[y][x] = 1 if random.random() < density else 0
+def randomize(buf, density: float = 0.35) -> None:
+    """Reset the padded buffer and seed it with random live cells. Picks a random palette."""
+    global born_pen, alive_pen
+    born_pen, alive_pen = PALETTES[random.randint(0, len(PALETTES) - 1)]
+    for i in range(PAD_SIZE):
+        buf[i] = 0
+    for y in range(1, HEIGHT + 1):
+        row = y * PAD_W
+        for x in range(1, WIDTH + 1):
+            buf[row + x] = 1 if random.random() < density else 0
 
 
 @micropython.native
-def count_neighbours(grid, x: int, y: int) -> int:
-    """Zählt lebende Nachbarn (toroidal, d.h. die Ränder wickeln sich um)."""
-    total = int(0)
-    W = int(WIDTH)
-    H = int(HEIGHT)
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
-            if dx == 0 and dy == 0:
-                continue
-            nx = (x + dx + W) % W
-            ny = (y + dy + H) % H
-            total += int(grid[ny][nx]) & 1
-    return total
+def update_halo(buf) -> None:
+    """Mirror real edges into the halo so the inner step loop can wrap without modulo."""
+    PW = PAD_W
+    H  = HEIGHT
+    W  = WIDTH
+    # Left/right halo columns for the real rows.
+    for y in range(1, H + 1):
+        row = y * PW
+        buf[row]         = buf[row + W]      # left halo  <- rightmost real cell
+        buf[row + W + 1] = buf[row + 1]      # right halo <- leftmost real cell
+    # Top/bottom halo rows (full width — picks up the corners just written).
+    top_halo = 0
+    top_real = PW
+    bot_real = H * PW
+    bot_halo = (H + 1) * PW
+    for x in range(PW):
+        buf[top_halo + x] = buf[bot_real + x]
+        buf[bot_halo + x] = buf[top_real + x]
 
 
 @micropython.native
-def step(current, nxt) -> None:
-    """Berechnet eine Generation von Conway's Game of Life."""
-    H = int(HEIGHT)
-    W = int(WIDTH)
-    for y in range(H):
-        for x in range(W):
-            alive = int(current[y][x]) & 1
-            n = count_neighbours(current, x, y)
-            if alive:
-                nxt[y][x] = 1 if n == 2 or n == 3 else 0
+def step(curr, nxt) -> int:
+    """Compute one generation of Conway's Game of Life.
+
+    Reads bit 0 of `curr` (the live state), writes into `nxt` with:
+      bit 0 = cell alive after this step
+      bit 1 = cell was alive before this step (used for the BORN highlight)
+    Returns a 32-bit hash of the new live grid for cycle detection.
+    """
+    PW = PAD_W
+    H  = HEIGHT
+    W  = WIDTH
+    h  = 0
+    for y in range(1, H + 1):
+        row_top = (y - 1) * PW
+        row_mid = y * PW
+        row_bot = (y + 1) * PW
+        for x in range(1, W + 1):
+            n = (curr[row_top + x - 1] & 1) + (curr[row_top + x] & 1) + (curr[row_top + x + 1] & 1) \
+              + (curr[row_mid + x - 1] & 1)                           + (curr[row_mid + x + 1] & 1) \
+              + (curr[row_bot + x - 1] & 1) + (curr[row_bot + x] & 1) + (curr[row_bot + x + 1] & 1)
+            old = curr[row_mid + x] & 1
+            if old:
+                new = 1 if (n == 2 or n == 3) else 0
             else:
-                nxt[y][x] = 1 if n == 3 else 0
+                new = 1 if n == 3 else 0
+            nxt[row_mid + x] = new | (old << 1)
+            h = ((h * 31) + new) & 0xFFFFFFFF
+    return h
 
 
 @micropython.native
-def draw(grid: list[list[int]], prev: list[list[int]], born_pen: int, alive_pen:int) -> None:
-    """Zeichnet das aktuelle Raster auf das Display."""
-    graphics.set_pen(BLACK)
-    graphics.clear()
-    
+def draw(buf) -> None:
+    """Render the grid in two pen passes (alive, born). Minimises pen switches."""
+    PW  = PAD_W
+    H   = HEIGHT
+    W   = WIDTH
+    g   = graphics
+    bp  = born_pen
+    ap  = alive_pen
+    blk = BLACK
 
-    for y in range(HEIGHT):
-        for x in range(WIDTH):
-            cur  = grid[y][x]
-            was  = prev[y][x]
-            if cur and not was:
-                pen = born_pen
-            elif cur:
-                pen = alive_pen
-            else:
-                continue
-            graphics.set_pen(pen)
-            graphics.pixel(x, y)
+    g.set_pen(blk)
+    g.clear()
 
-    cu.update(graphics)
-
-
-@micropython.native
-def population(grid) -> int:
-    """Gibt die Anzahl lebender Zellen zurück."""
-    total = int(0)
-    H = int(HEIGHT)
-    W = int(WIDTH)
+    # Pass 1: cells that survived (alive both before and after).
+    g.set_pen(ap)
     for y in range(H):
-        row = grid[y]
+        row = (y + 1) * PW + 1
         for x in range(W):
-            total += int(row[x])
-    return total
+            if (buf[row + x] & 0b11) == 0b11:
+                g.pixel(x, y)
+
+    # Pass 2: cells that were born this step (alive now, dead before).
+    g.set_pen(bp)
+    for y in range(H):
+        row = (y + 1) * PW + 1
+        for x in range(W):
+            if (buf[row + x] & 0b11) == 0b01:
+                g.pixel(x, y)
+
+    cu.update(g)
 
 
 @micropython.native
 def is_cyclic(history) -> bool:
-    """True, wenn die Population einen sich wiederholenden Zyklus bildet."""
-    n = int(len(history))
-    max_period = int(CYCLE_MAX_PERIOD)
-    min_repeats = int(CYCLE_MIN_REPEATS)
+    """Return True when the trailing values in `history` repeat with some period <= CYCLE_MAX_PERIOD."""
+    n           = len(history)
+    max_period  = CYCLE_MAX_PERIOD
+    min_repeats = CYCLE_MIN_REPEATS
     for period in range(1, max_period + 1):
         needed = period * min_repeats
         if n < needed:
             continue
         offset = n - needed
-        cyclic = int(1)
+        match  = True
         for i in range(period, needed):
-            if int(history[offset + i]) != int(history[offset + i % period]):
-                cyclic = int(0)
+            if history[offset + i] != history[offset + i % period]:
+                match = False
                 break
-        if cyclic:
+        if match:
             return True
     return False
 
 
-def handle_buttons(paused: bool, tick_ms: int) -> tuple[bool, int]:
-    """Verarbeitet Knopfeingaben, gibt neuen paused-Zustand und Tick-Zeit zurück."""
-    if cu.is_pressed(CosmicUnicorn.SWITCH_BRIGHTNESS_UP):
-        cu.adjust_brightness(+0.05)
-    if cu.is_pressed(CosmicUnicorn.SWITCH_BRIGHTNESS_DOWN):
-        cu.adjust_brightness(-0.05)
-    if cu.is_pressed(CosmicUnicorn.SWITCH_A):
-        paused = not paused
-        time.sleep_ms(200)
-    if cu.is_pressed(CosmicUnicorn.SWITCH_C):
-        tick_ms = max(TICK_MIN_MS, tick_ms - TICK_MS)
-        time.sleep_ms(200)
-    if cu.is_pressed(CosmicUnicorn.SWITCH_D):
-        tick_ms = min(TICK_MAX_MS, tick_ms + TICK_MS)
-        time.sleep_ms(200)
-    return paused, tick_ms
+# --- Buttons (non-blocking, edge-debounced) ---
+
+_btn_state      = {}
+_btn_last_press = {}
 
 
-# --- Zustand ---
-grid  = make_grid()
-nxt   = make_grid()
-prev  = make_grid()
+def button_pressed(btn, debounce_ms: int = BTN_DEBOUNCE_MS) -> bool:
+    """True only on the rising edge of `btn`, after the debounce window has passed."""
+    pressed = cu.is_pressed(btn)
+    was = _btn_state.get(btn, False)
+    _btn_state[btn] = pressed
+    if pressed and not was:
+        now = time.ticks_ms()
+        last = _btn_last_press.get(btn, 0)
+        if time.ticks_diff(now, last) > debounce_ms:
+            _btn_last_press[btn] = now
+            return True
+    return False
+
+
+# --- State ---
+grid = bytearray(PAD_SIZE)
+nxt  = bytearray(PAD_SIZE)
 randomize(grid)
 
-paused     = False
-tick_ms    = TICK_MS
-pop_history: list[int] = []
+paused       = False
+tick_ms      = TICK_MS
+hash_history = []
 
-# --- Hauptschleife ---
+last_step_t       = time.ticks_ms()
+last_brightness_t = 0
+
+# --- Main loop ---
+# Buttons: A pauses, B reseeds, C speeds up, D slows down, +/- adjust brightness.
 while True:
-    # Knöpfe: A pausiert, B startet neu, C schneller, D langsamer
-    if cu.is_pressed(CosmicUnicorn.SWITCH_B):
+    now = time.ticks_ms()
+
+    if button_pressed(CosmicUnicorn.SWITCH_A):
+        paused = not paused
+    if button_pressed(CosmicUnicorn.SWITCH_B):
         randomize(grid)
-        pop_history.clear()
-        time.sleep_ms(300)
+        hash_history.clear()
+    if button_pressed(CosmicUnicorn.SWITCH_C):
+        tick_ms = max(TICK_MIN_MS, tick_ms - TICK_MS)
+    if button_pressed(CosmicUnicorn.SWITCH_D):
+        tick_ms = min(TICK_MAX_MS, tick_ms + TICK_MS)
 
-    paused, tick_ms = handle_buttons(paused, tick_ms)
+    if time.ticks_diff(now, last_brightness_t) > BRIGHTNESS_RATE_MS:
+        if cu.is_pressed(CosmicUnicorn.SWITCH_BRIGHTNESS_UP):
+            cu.adjust_brightness(+0.05)
+            last_brightness_t = now
+        elif cu.is_pressed(CosmicUnicorn.SWITCH_BRIGHTNESS_DOWN):
+            cu.adjust_brightness(-0.05)
+            last_brightness_t = now
 
-    if not paused:
-        step(grid, nxt)
-        draw(nxt, grid, BORN, ALIVE)
-        # Puffer rotieren (kein Speicher allokieren)
-        grid, nxt, prev = nxt, prev, grid
+    if not paused and time.ticks_diff(now, last_step_t) >= tick_ms:
+        update_halo(grid)
+        h = step(grid, nxt)
+        grid, nxt = nxt, grid
+        draw(grid)
 
-        pop_history.append(population(grid))
-        if len(pop_history) > HISTORY_SIZE:
-            pop_history.pop(0)
-        if is_cyclic(pop_history):
+        hash_history.append(h)
+        if len(hash_history) > HISTORY_SIZE:
+            hash_history.pop(0)
+
+        if is_cyclic(hash_history):
             randomize(grid)
-            pop_history.clear()
+            hash_history.clear()
 
-    time.sleep_ms(tick_ms)
+        last_step_t = now
+
+    time.sleep_ms(5)
