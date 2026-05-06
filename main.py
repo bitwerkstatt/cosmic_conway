@@ -23,9 +23,22 @@ cu.set_brightness(0.5)
 
 # --- Farben als Pen-Werte ---
 BLACK = graphics.create_pen(0, 0, 0)
-ALIVE = graphics.create_pen(0, 200, 80)    # lebendig: grün
-BORN  = graphics.create_pen(0, 255, 180)   # neu geboren: helles Cyan
-DYING = graphics.create_pen(80, 20, 0)     # sterbend: dunkles Rot
+
+# Paletten: (BORN-Farbe, ALIVE-Farbe)
+PALETTES = [
+    (graphics.create_pen(0, 255, 180),   graphics.create_pen(0, 200, 80)),    # Cyan / Grün
+    (graphics.create_pen(255, 255, 0),   graphics.create_pen(255, 140, 0)),   # Gelb / Orange
+    (graphics.create_pen(255, 150, 200), graphics.create_pen(220, 20, 60)),   # Rosa / Rot
+    (graphics.create_pen(200, 0, 255),   graphics.create_pen(0, 100, 255)),   # Violett / Blau
+    (graphics.create_pen(255, 220, 80),  graphics.create_pen(200, 0, 0)),     # Feuer
+    (graphics.create_pen(220, 240, 255), graphics.create_pen(60, 140, 255)),  # Eis
+    (graphics.create_pen(180, 255, 180), graphics.create_pen(0, 140, 0)),     # Matrix
+    (graphics.create_pen(255, 255, 150), graphics.create_pen(200, 100, 0)),   # Gold
+    (graphics.create_pen(100, 220, 255), graphics.create_pen(0, 40, 180)),    # Ozean
+    (graphics.create_pen(255, 150, 255), graphics.create_pen(180, 0, 200)),   # Magenta
+]
+
+BORN, ALIVE = PALETTES[0]
 
 
 # --- Hilfsfunktionen ---
@@ -36,9 +49,10 @@ def make_grid() -> list[list[int]]:
     return [[0] * WIDTH for _ in range(HEIGHT)]
 
 
-@micropython.native
 def randomize(grid: list[list[int]], density: float = 0.35) -> None:
-    """Befüllt das Raster zufällig mit lebenden Zellen."""
+    """Befüllt das Raster zufällig mit lebenden Zellen und wählt eine zufällige Palette."""
+    global BORN, ALIVE
+    BORN, ALIVE = PALETTES[random.randint(0, len(PALETTES) - 1)]
     for y in range(HEIGHT):
         for x in range(WIDTH):
             grid[y][x] = 1 if random.random() < density else 0
