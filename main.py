@@ -78,7 +78,6 @@ def step(current, nxt) -> None:
 @micropython.native
 def draw(grid: list[list[int]], prev: list[list[int]]) -> None:
     """Zeichnet das aktuelle Raster auf das Display."""
-    graphics.set_pen(BLACK)
     graphics.clear()
 
     for y in range(HEIGHT):
@@ -89,8 +88,6 @@ def draw(grid: list[list[int]], prev: list[list[int]]) -> None:
                 pen = BORN
             elif cur:
                 pen = ALIVE
-            elif was and not cur:
-                pen = DYING
             else:
                 continue
             graphics.set_pen(pen)
@@ -158,7 +155,6 @@ prev  = make_grid()
 randomize(grid)
 
 paused     = False
-generation = 0
 tick_ms    = TICK_MS
 pop_history: list[int] = []
 
@@ -168,7 +164,6 @@ while True:
     if cu.is_pressed(CosmicUnicorn.SWITCH_B):
         randomize(grid)
         pop_history.clear()
-        generation = 0
         time.sleep_ms(300)
 
     paused, tick_ms = handle_buttons(paused, tick_ms)
@@ -178,7 +173,6 @@ while True:
         draw(nxt, grid)
         # Puffer rotieren (kein Speicher allokieren)
         grid, nxt, prev = nxt, prev, grid
-        generation += 1
 
         pop_history.append(population(grid))
         if len(pop_history) > HISTORY_SIZE:
@@ -186,6 +180,5 @@ while True:
         if is_cyclic(pop_history):
             randomize(grid)
             pop_history.clear()
-            generation = 0
 
     time.sleep_ms(tick_ms)
