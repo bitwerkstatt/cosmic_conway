@@ -22,6 +22,8 @@ CYCLE_MAX_PERIOD  = 20
 CYCLE_MIN_REPEATS = 3
 HISTORY_SIZE      = CYCLE_MAX_PERIOD * CYCLE_MIN_REPEATS
 
+RESET_EVERY_GENERATIONS = 500
+
 # Button input timing.
 BTN_DEBOUNCE_MS    = 180   # rising-edge debounce window
 BRIGHTNESS_RATE_MS = 80    # repeat rate while a brightness button is held
@@ -194,11 +196,22 @@ def button_pressed(btn, debounce_ms: int = BTN_DEBOUNCE_MS) -> bool:
 # --- State ---
 grid = bytearray(PAD_SIZE)
 nxt  = bytearray(PAD_SIZE)
-randomize(grid)
 
 paused       = False
 tick_ms      = TICK_MS
 hash_history = []
+generation   = 0
+
+
+def reset_simulation() -> None:
+    """Seed a fresh grid and clear all per-run bookkeeping."""
+    global generation
+    randomize(grid)
+    hash_history.clear()
+    generation = 0
+
+
+reset_simulation()
 
 last_step_t       = time.ticks_ms()
 last_brightness_t = 0
@@ -211,8 +224,7 @@ while True:
     if button_pressed(CosmicUnicorn.SWITCH_A):
         paused = not paused
     if button_pressed(CosmicUnicorn.SWITCH_B):
-        randomize(grid)
-        hash_history.clear()
+        reset_simulation()
     if button_pressed(CosmicUnicorn.SWITCH_C):
         tick_ms = max(TICK_MIN_MS, tick_ms - TICK_MS)
     if button_pressed(CosmicUnicorn.SWITCH_D):
@@ -235,10 +247,10 @@ while True:
         hash_history.append(h)
         if len(hash_history) > HISTORY_SIZE:
             hash_history.pop(0)
+        generation += 1
 
-        if is_cyclic(hash_history):
-            randomize(grid)
-            hash_history.clear()
+        if is_cyclic(hash_history) or generation >= RESET_EVERY_GENERATIONS:
+            reset_simulation()
 
         last_step_t = now
 
